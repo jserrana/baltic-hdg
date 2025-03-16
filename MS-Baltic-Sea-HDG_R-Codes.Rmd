@@ -1,0 +1,1583 @@
+---
+title: "R Markdown of Baltic Sea Hydrocarbon Degradation Potential"
+author: "Joeselle Serrana"
+date: "2025-01-16"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+### Load required library and set working directory
+
+```{r}
+# Load libraries for data manipulation, analysis, and visualization
+library("phyloseq")      # Tools for microbiome census data
+library("microeco")      # Ecological analysis of microbiome data; visit https://github.com/ChiLiubio/microeco for more details
+
+# Load libraries for general and specialized visualizations
+library("ggplot2")       # Data visualization
+library("ggpubr")
+library("ape")
+library("ggtree")
+library("microViz")      # Microbiome data visualization
+library("car")           # Companion to Applied Regression
+library("magrittr")      # Pipe-friendly tools for better syntax
+library("ComplexHeatmap")# Advanced heatmap visualization
+library("aplot")         # Annotate or arrange multiple plots
+library("patchwork")
+library("ggh4x")         # Extensions for ggplot2
+library("RColorBrewer")  # Color palettes
+library("dplyr")         # Data manipulation
+library("mice")          # Multivariate Imputation by Chained Equations
+library("textshape")     # Text shaping tools
+library("readxl")        # Read Excel files
+library("data.table")
+
+theme_set(theme_classic())
+
+#setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/(Draft) Baltic Sea HDG/MS-Baltic-Sea-HDG_R-Analysis")
+setwd("C:/Users/JoeselleSerrana/iCloudDrive/Documents/(Draft) Baltic Sea HDG/MS-Baltic-Sea-HDG_R-Analysis")
+
+# Load data
+metadata <- readxl::read_excel("../MS-Baltic-Sea-HDG_Supplementary.xlsx", sheet = "S1 Metadata")
+mag.tbl <- readxl::read_excel("../MS-Baltic-Sea-HDG_Supplementary.xlsx", sheet = "S3 MAG Stats")
+canthyd <- readxl::read_excel("../MS-Baltic-Sea-HDG_Supplementary.xlsx", sheet = "S4 CANT-HYD")
+rpkm <- readxl::read_excel("../MS-Baltic-Sea-HDG_Supplementary.xlsx", sheet = "S5 RPKM")
+hdg.mco <- readRDS("data/hdg.mco.RDS"); hmm.mco <- readRDS("data/hmm.mco.RDS")
+tax.mco <- readRDS("data/tax.mco.RDS"); spe.mco <- readRDS("data/spe.mco.RDS")
+```
+
+### Generate microtables
+
+```{r}
+# Merge the two data frames on the "HMM" column
+bin.rpk <- merge(rpkm, canthyd, by = "HMM", all.x = TRUE); bin.rpk <- bin.rpk[, c(setdiff(names(bin.rpk), "HMM"), "HMM")]
+
+# Merge the two data frames on the "MAGs" column
+bin.tbl <- merge(bin.rpk, mag.tbl, by = "MAG", all.x = TRUE); bin.tbl <- bin.tbl[, c(setdiff(names(bin.tbl), "MAG"), "MAG")]
+
+### STEP 1a: Generate phyloseq object for microtable community dataset
+### A phyloseq object contains OTU table (taxa abundances), sample metadata, taxonomy table (mapping between OTUs and higher-level taxonomic classifications), and phylogenetic tree (relations between the taxa).
+
+# Import counts annotation data from Excel file and define row names
+bin.cnt <- bin.tbl[1:227]; rownames(bin.cnt) <- bin.cnt[, 1]; bin.cnt <- bin.cnt[, -1]
+
+# Remove decimals from columns in data frames
+bin.cnt[1:193] <- lapply(bin.cnt, as.integer); bin.cnt[1:193][is.na(bin.cnt[1:193])] <- 0
+
+# Create phyloseq object
+hdg.psq <- phyloseq(otu_table(as.matrix(bin.cnt[1:193]), taxa_are_rows = TRUE),
+                    tax_table(as.matrix(bin.cnt[c(198:203)])),
+                    sample_data(column_to_rownames(metadata, loc = 1)))
+
+# Create microtable object for microeco downstream analyses
+hdg.mco <- file2meco::phyloseq2meco(hdg.psq, auto_tidy = FALSE); hdg.mco$tidy_dataset()
+
+# Add abundance and beta diversity estimates
+# Calculate the taxa abundance at each taxonomic rank using cal_abund()
+hdg.mco$cal_abund()
+# Calculate alpha diversity
+hdg.mco$cal_alphadiv(PD = FALSE)
+# Calculate beta diversity
+hdg.mco$cal_betadiv(unifrac = FALSE)
+
+# Save files as RDS
+saveRDS(hdg.psq, "data/hdg.psq.RDS"); saveRDS(hdg.mco, "data/hdg.mco.RDS")
+
+### STEP 1b: Create phyloseq object
+tax.psq <- phyloseq(otu_table(as.matrix(bin.cnt[1:193]), taxa_are_rows = TRUE),
+                    tax_table(as.matrix(bin.cnt[218:225])),
+                    sample_data(column_to_rownames(metadata, loc = 1)))
+
+# Create microtable object for microeco downstream analyses
+# Create microeco object
+tax.mco <- file2meco::phyloseq2meco(tax.psq, auto_tidy = FALSE)
+tax.mco$tidy_dataset()
+
+# Add abundance and beta diversity estimates
+# Calculate the taxa abundance at each taxonomic rank using cal_abund()
+tax.mco$cal_abund()
+# Calculate alpha diversity
+tax.mco$cal_alphadiv(PD = FALSE)
+
+# Calculate beta diversity
+tax.mco$cal_betadiv(unifrac = FALSE)
+
+# Save files as RDS
+saveRDS(tax.psq, "data/tax.psq.RDS"); saveRDS(tax.mco, "data/tax.mco.RDS")
+
+### Aggregate taxa at Species-level
+spe.psq <- tax_glom(tax.psq, taxrank = "Species")
+# Clone the dataset and redefine Region levels
+spe.mco <- file2meco::phyloseq2meco(spe.psq, auto_tidy = FALSE); spe.mco$tidy_dataset()
+
+### STEP 1d: Add abundance and beta diversity estimates
+# Calculate the taxa abundance at each taxonomic rank using cal_abund()
+spe.mco$cal_abund()
+# Calculate alpha diversity
+spe.mco$cal_alphadiv(PD = FALSE)
+# Calculate beta diversity
+spe.mco$cal_betadiv(unifrac = FALSE)
+
+# Save files as RDS
+saveRDS(spe.psq, "data/spe.psq.RDS"); saveRDS(spe.mco, "data/spe.mco.RDS")
+
+### Aggregate taxa at HMM-level
+hmm.psq <- tax_glom(hdg.psq, taxrank = "HMM")
+# Clone the dataset and redefine Region levels
+hmm.mco <- file2meco::phyloseq2meco(hmm.psq, auto_tidy = FALSE); hmm.mco$tidy_dataset()
+
+### STEP 1d: Add abundance and beta diversity estimates
+# Calculate the taxa abundance at each taxonomic rank using cal_abund()
+hmm.mco$cal_abund()
+# Calculate alpha diversity
+hmm.mco$cal_alphadiv(PD = FALSE)
+# Calculate beta diversity
+hmm.mco$cal_betadiv(unifrac = FALSE)
+
+# Save files as RDS
+saveRDS(hmm.psq, "data/hmm.psq.RDS"); saveRDS(hmm.mco, "data/hmm.mco.RDS")
+```
+
+```{r}
+### Subset microtable
+sdm.mco <- clone(spe.mco); sdm.mco$sample_table %<>% base::subset(Environment == "Benthic")
+sdm.mco$tidy_dataset()
+
+### STEP 1d: Add abundance and beta diversity estimates
+
+# Calculate the taxa abundance at each taxonomic rank using cal_abund()
+sdm.mco$cal_abund()
+
+# Calculate alpha diversity
+sdm.mco$cal_alphadiv(PD = FALSE)
+
+# Calculate beta diversity
+sdm.mco$cal_betadiv(unifrac = FALSE)
+
+# Save files as RDS
+saveRDS(sdm.mco, "data/sdm.mco.RDS")
+
+### Subset microtable
+plg.mco <- clone(spe.mco); plg.mco$sample_table %<>% base::subset(Environment == "Pelagic")
+plg.mco$tidy_dataset()
+
+### STEP 1d: Add abundance and beta diversity estimates
+
+# Calculate the taxa abundance at each taxonomic rank using cal_abund()
+plg.mco$cal_abund()
+
+# Calculate alpha diversity
+plg.mco$cal_alphadiv(PD = FALSE)
+
+# Calculate beta diversity
+plg.mco$cal_betadiv(unifrac = FALSE)
+
+# Save files as RDS
+saveRDS(plg.mco, "data/plg.mco.RDS")
+```
+
+### Site map
+
+```{r}
+# Load necessary libraries
+library(ggOceanMaps)
+library(ggspatial)
+library(RColorBrewer)
+library(viridis)
+library(sf)
+
+Sys.setenv("SHAPE_RESTORE_SHX" = "YES")
+shapefile <- st_read("data/HELCOM_subbasins_2022_level2.shp")
+shapefile <- st_set_crs(shapefile, 4326)  # Assign EPSG:4326 (WGS 84)
+
+# Create the basemap and plot
+map1 <- basemap(limits = c(5, 25, 53, 68),
+        bathymetry = TRUE, glaciers = FALSE, land.col = "#98AD98", land.border.col = "gray50", bathy.style = "raster_binned_grays", legends = FALSE) +
+        ggspatial::geom_spatial_point(data = metadata, aes(x = Longitude, y = Latitude, shape = Reference, color = Environment, size = Depth), alpha = 0.75) +
+        ggspatial::annotation_scale(location = "br", width_hint = 0.25, bar_cols = c("gray85", "white")) +
+        #ggspatial::geom_spatial_text_repel(data = metadata, aes(x = Longitude, y = Latitude, label = Site, color = Environment), max.overlaps = Inf, size = 2) +
+        scale_color_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513")) +
+        #scale_color_manual(values = rev(viridis(16, option = "viridis"))) +
+        #labs(x = "Longitude (decimal degrees)", y = "Latitude (decimal degrees)") + 
+        #geom_sf(data = shapefile, fill = NA, color = "black", size = 10) + # Overlay shapefile
+        theme(axis.text = element_text(size = 8), axis.text.y = element_text(angle = 90)); map1
+
+map2 <- basemap(limits = c(5, 25, 53, 68),
+        bathymetry = TRUE, glaciers = FALSE, land.col = "gray90", land.border.col = "gray90", bathy.style = "raster_binned_grays", legends = FALSE) +
+        ggspatial::geom_spatial_point(data = metadata,
+                                      aes(x = Longitude, y = Latitude, color = HELCOM, shape = Environment),
+                                      size = 3, alpha = 1) +
+        ggspatial::annotation_scale(location = "br", width_hint = 0.25, bar_cols = c("gray85", "white")) +
+        #ggspatial::geom_spatial_text_repel(data = metadata, aes(x = Longitude, y = Latitude, label = Site, color = HELCOM), max.overlaps = Inf, size = 2) +
+        scale_color_manual(values = colorRampPalette(paletteer_d("rcartocolor::Antique"))(17)) +
+        #labs(x = "Longitude (decimal degrees)", y = "Latitude (decimal degrees)") + 
+        #geom_sf(data = shapefile, fill = NA, color = "black", size = 10) + # Overlay shapefile
+        theme(axis.text = element_text(size = 8), axis.text.y = element_text(angle = 90)); map2
+```
+
+### MAG statistics
+
+```{r}
+mag.tbl <- merge(mag, metadata, by = "Sample", all.x = TRUE)
+
+# Count the occurrences of each Environment value (Pelagic vs Benthic)
+environment_counts <- table(mag.tbl$Environment)
+
+# Convert the counts to a dataframe for ggplot
+df <- as.data.frame(environment_counts)
+
+# Rename the columns for clarity
+colnames(df) <- c("Environment", "Count")
+
+# Create a vertical stacked bar plot
+m1 <- ggplot(df, aes(x = "", y = Count, fill = Environment)) +  # Empty x-axis for a single bar
+      geom_bar(stat = "identity", color = "black", size = 0.5) +
+      labs(x = NULL, y = "Number of MAGs") +
+      theme_classic() +
+      theme(axis.text.y = element_blank(), axis.text.x = element_text(size = 9), axis.ticks.y = element_blank()) +  
+      scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513")) +
+      coord_flip() + scale_y_continuous(breaks = c(seq(0, max(df$Count), by = 800), 3200))
+
+# Load necessary libraries
+library(ggplot2)
+library(patchwork)  # For combining plots
+
+# Create individual plots
+#ma <- ggplot(mag.tbl, aes(x = Completeness)) +  geom_density(fill = "gray50", alpha = 0.5) + labs(x = "Completeness (%)", y = "MAG Count") + geom_vline(aes(xintercept = mean(Completeness, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+#mb <- ggplot(mag.tbl, aes(x = Contamination)) +  geom_density(fill = "gray50", alpha = 0.5) + labs(x = "Contamination (%)", y = NULL) + geom_vline(aes(xintercept = mean(Contamination, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+#mc <- ggplot(mag.tbl, aes(x = `HDG Count`)) +  geom_density(fill = "gray50", alpha = 0.5) + labs(x = "HDG Count", y = NULL) + geom_vline(aes(xintercept = mean(`HDG Count`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+
+ma <- ggplot(mag.tbl, aes(x = Completeness, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x = "Completeness (%)", y = "MAG Count") + geom_vline(aes(xintercept = mean(Completeness, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+mb <- ggplot(mag.tbl, aes(x = Contamination, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x = "Contamination (%)", y = NULL) + geom_vline(aes(xintercept = mean(Contamination, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+mc <- ggplot(mag.tbl, aes(x = `HDG Count`, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x = "HDG Count", y = NULL) + geom_vline(aes(xintercept = mean(`HDG Count`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+
+# Combine the plots in one row
+m2 <- (ma | mb | mc) + plot_layout(guides = 'collect') + plot_annotation()
+
+# Display the plot
+print(m2)
+
+# Load necessary libraries
+library(ggplot2)
+library(patchwork)  # For combining plots
+
+# Create individual plots
+#md <- ggplot(mag.tbl, aes(x = `Genome size`)) +  geom_histogram(fill = "gray50", alpha = 0.5) + labs(x = "Genome size (bp)", y = "MAG Count") + geom_vline(aes(xintercept = mean(`Genome size`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+#me <- ggplot(mag.tbl, aes(x = `N50 (Contigs)`)) +  geom_histogram(fill = "gray50", alpha = 0.5) + labs(x = "N50 (Contigs)", y = "MAG Count") + geom_vline(aes(xintercept = mean(`N50 (Contigs)`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+#mf <- ggplot(mag.tbl, aes(x = `Predicted Genes`)) +  geom_histogram(fill = "gray50", alpha = 0.5) + labs(x = "Predicted Gene Count", y = NULL) + geom_vline(aes(xintercept = mean(`Predicted Genes`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+#mg <- ggplot(mag.tbl, aes(x = `GC`)) +  geom_histogram(fill = "gray50", alpha = 0.5) + labs(x = "GC Content", y = NULL) + geom_vline(aes(xintercept = mean(`GC`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5)
+
+md <- ggplot(mag.tbl, aes(x = `Genome size`, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x =  "Genome size (bp)", y = "MAG Count") + geom_vline(aes(xintercept = mean(`Genome size`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+me <- ggplot(mag.tbl, aes(x = `N50 (Contigs)`, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x = "N50 (Contigs)", y = "MAG Count") + geom_vline(aes(xintercept = mean(`N50 (Contigs)`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+mf <- ggplot(mag.tbl, aes(x = `Predicted Genes`, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x = "Predicted Gene Count", y = NULL) + geom_vline(aes(xintercept = mean(`Predicted Genes`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+mg <- ggplot(mag.tbl, aes(x = `GC`, fill = Environment)) + geom_histogram(alpha = 0.5, position = "identity") + labs(x = "GC Content", y = NULL) + geom_vline(aes(xintercept = mean(`GC`, na.rm = TRUE)), color = "gray25", linetype = "dashed", linewidth = 0.5) + theme(legend.position = "none") + scale_fill_manual(values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"))
+
+# Combine the plots in one row
+m3 <- (md | mg) / (me | mf) + plot_layout(guides = 'collect') + plot_annotation()
+
+# Display the plot
+print(m3)
+```
+
+### Phylogenomic Tree
+
+```{r}
+# Load required libraries
+library("phytools")
+library("ggtree")
+library("ggstar")
+library("ggtreeExtra")
+library("paletteer")
+
+# Assign tree and metadata
+#tree <- read.tree("gtdbtk.ar53.user_msa.phy"); metadata <- mag.tbl[mag.tbl$Domain == "Archaea", ]
+tree <- read.tree("data/gtdbtk.bac120.user_msa.phy.treefile"); metadata <- mag.tbl[mag.tbl$Domain == "Bacteria", ]
+tree <- phytools::midpoint.root(tree)
+rownames(metadata) <- metadata$MAG
+
+# Ensure tree$tip.label and mag.tbl$label are character vectors
+tree$tip.label <- as.character(tree$tip.label)
+metadata$MAG <- as.character(metadata$MAG)
+metadata <- metadata[match(tree$tip.label, metadata$MAG), ]
+
+colnames(metadata)[colnames(metadata) == "MAG"] <- "label"
+
+# Extract the clade label information. Because some nodes of tree are annotated to genera, which can be displayed with high light using ggtree.
+#nodeids <- nodeid(tree, tree$node.label[nchar(tree$node.label)>4])
+#nodedf <- data.frame(node = nodeids)
+#nodelab <- gsub("[\\.0-9]", "", tree$node.label[nchar(tree$node.label)>4])
+#p <- p + geom_hilight(data = nodedf, mapping = aes(node = node), extendto = 2, alpha = 0.3, fill = "grey", color = "grey50", size = 0.05)
+
+p <- ggtree(tree, layout = "fan", open.angle = 90, size = 0.05) + #geom_text(aes(label = node), hjust = -.3, size = 2) +
+     geom_hilight(node = 3942, fill = "#CC8615", alpha = 0.1) +
+     geom_hilight(node = 3949, fill = "#4ABD99", alpha = 0.1) +
+     geom_hilight(node = 4978, fill = "#B0BD2D", alpha = 0.1) 
+
+p$data <- merge(p$data, metadata, by = "label", all.x = TRUE)
+
+p <- p + geom_tippoint(mapping = aes(colour = Phylum, fill = Phylum), shape = 21, size = 1.5, stroke = 0.25,
+                       alpha = 0.5, show.legend = FALSE) +
+         scale_color_manual(values = rev(colorRampPalette(paletteer_d("ggthemes::Classic_10"))(30))) +
+         geom_fruit(geom = geom_tile, mapping = aes(fill = Phylum), width = 0.1, offset = 0.1) +
+         scale_fill_manual(name = "Phylum", values = rev(colorRampPalette(paletteer_d("ggthemes::Classic_10"))(30)),
+                           guide = guide_legend(keywidth = 0.3, keyheight = 0.3, order = 3), na.translate = FALSE)
+
+#p <- p + ggnewscale::new_scale_fill() +
+#         geom_fruit(geom = geom_tile, mapping = aes(fill = Subbasin), width = 0.1, offset = 0.1, color = NA) +
+#         scale_fill_manual(name = "Baltic Sea Sub-basin", 
+#                           values = colorRampPalette(paletteer_d("rcartocolor::Antique"))(17),
+#                           guide = guide_legend(keywidth = 0.3, keyheight = 0.3, order = 3), na.translate = FALSE)
+
+# Add a new scale for Completeness and plot heatmap-like annotation
+p <- p + ggnewscale::new_scale_fill() +
+         geom_fruit(geom = geom_tile, 
+                    mapping = aes(fill = Completeness), 
+                    width = 0.1, offset = 0.1, color = NA) +
+         scale_fill_gradient(name = "Completeness", low = "#FFEDA0", high = "#F03B20") +
+         theme(legend.title = element_text(size = 10), legend.text = element_text(size = 6), legend.position = "right")
+
+p <- p + ggnewscale::new_scale_fill() +
+         geom_fruit(geom = geom_tile, mapping = aes(fill = Environment), width = 0.05, offset = 0.1, color = NA) +
+         geom_fruit(geom = geom_bar, mapping = aes(y = Sample, x = `HDG Count`, fill = NULL),
+                    pwidth = 0.5, orientation = "y", stat = "identity",
+                    axis.params = list(axis = "x", text.size = 1.5, hjust = 0,5, vjust = 1, nbreak = 3),
+                    grid.params = list()) + 
+         scale_fill_manual(name = "Environment", values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"),
+                           guide = guide_legend(keywidth = 0.3, keyheight = 0.3, order = 3), na.translate = FALSE) +
+         theme(legend.title = element_text(size = 10), legend.text = element_text(size = 8))
+
+print(p)
+```
+
+### Taxonomic composition
+
+```{r, Taxonomic Leves}
+mag.tbl <- merge(mag, metadata, by = "Sample", all.x = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Reshape the data from wide to long format, including 'Order'
+mag.tbl_long <- mag.tbl %>% pivot_longer(cols = c(Order, Family, Genus, Species), names_to = "Taxa_Type", values_to = "Taxa_Value")
+
+# Create a new column to check if 'Taxa_Value' contains "Unclassified"
+mag.tbl_long <- mag.tbl_long %>% mutate(Unclassified_Status = ifelse(grepl("Unclassified", Taxa_Value), "Unclassified", "Classified"))
+
+# Reorder Unclassified_Status to ensure Unclassified comes first
+mag.tbl_long$Unclassified_Status <- factor(mag.tbl_long$Unclassified_Status, levels = c("Unclassified", "Classified"))
+
+# Reorder Taxa_Type to make sure it goes in the desired order
+mag.tbl_long$Taxa_Type <- factor(mag.tbl_long$Taxa_Type, levels = c("Species", "Genus", "Family", "Order"))
+
+# Calculate the count and percentage of each category for each 'Taxa_Type'
+percentage_data <- mag.tbl_long %>% count(Taxa_Type, Unclassified_Status) %>% group_by(Taxa_Type) %>% mutate(Percentage = n / sum(n) * 100)
+
+# Plot the stacked bar graph with flipped coordinates and custom legend title
+t1 <- ggplot(percentage_data, aes(x = Taxa_Type, y = Percentage, fill = Unclassified_Status)) + geom_bar(stat = "identity") +  # Default is stacked bars
+      geom_bar(stat = "identity", color = "black", size = 0.20) +
+      geom_text(aes(label = n), position = position_stack(vjust = 0.5), hjust = 0.5, size = 3) +
+      labs(x = NULL, y = "MAG Count (%)", fill = "Taxonomic Level") +  # Change the legend title to "Taxa"
+      scale_fill_manual(values = c("Classified" = "gray85", "Unclassified" = "white")) +
+      coord_flip() + theme(legend.position = "left", legend.justification = c(0, 0))
+
+t1
+```
+
+```{r, Venn Diagram}
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+
+# merge samples as one community for each group
+tmp <- dataset$merge_samples("Environment")
+# tmp is a new microtable object
+# create trans_venn object
+t1 <- trans_venn$new(tmp, ratio = "numratio")
+t1$plot_venn(color_circle = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"))
+```
+
+```{r, Shared Species UpSet Plot}
+# Pie chart of shared species
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                       "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga", "Northern Baltic Proper", "Gulf of Finland",
+                                                       "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+# create venn plot with more information
+tmp <- spe.mco$merge_samples("Subbasin")
+
+t1 <- trans_venn$new(dataset = tmp)
+
+# only show some sets with large intersection numbers
+t1$data_summary %<>% .[.[, 1] > 5, ]
+
+g1 <- t1$plot_bar(left_plot = TRUE, bottom_height = 0.5, left_width = 0.15, up_bar_fill = "grey50", left_bar_fill = "grey50", bottom_point_color = "black", sort_samples = FALSE)
+g1
+```
+
+```{r, Phylum Heatmap}
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table$Environment %<>% factor(., levels = c("Benthic","Pelagic"))
+
+## Plot heatmap Substrates
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Phylum", ntaxa = 15)
+h2 <- t1$plot_heatmap(facet = "Environment", xtext_keep = TRUE, xtext_type_hor = FALSE, withmargin = FALSE, color_values = c(RColorBrewer::brewer.pal(n = 10, name = "RdPu")), xtext_size = 6) + theme_classic() +
+                      theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 8, face = "italic"), legend.position = "top")
+
+print(h2)
+```
+
+```{r}
+library("ggnested")
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table$Environment %<>% factor(., levels = c("Benthic","Pelagic"))
+
+# sum others in each phylum
+test1 <- trans_abund$new(dataset = dataset, #groupmean = "HELCOM", 
+                         taxrank = "Class", ntaxa = 10, show = 0, high_level = "Phylum", high_level_fix_nsub = 3, delete_taxonomy_prefix = TRUE)
+
+h3 <- test1$plot_bar(ggnested = TRUE, high_level_add_other = TRUE, facet = "Environment", color_values = c("#CC8615","#4ABD99","#17BECF","#499B27")) +
+      theme(axis.text.x = element_blank(), axis.title.y = element_text(size = 10, face = NULL), axis.text.y = element_text(size = 8, face = NULL), legend.position = "right")
+
+h3
+```
+
+```{r}
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table$Environment %<>% factor(., levels = c("Benthic","Pelagic"))
+#dataset$sample_table %<>% base::subset(Environment == "Pelagic")
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg",
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Genus", ntaxa = 10, groupmean = "Environment")
+g0 <- t1$plot_bar(coord_flip = FALSE, clustering_plot = FALSE, color_values = rev(RColorBrewer::brewer.pal(20, "YlOrRd"))) +
+      theme(axis.title.x = element_text(size = 12), axis.ticks.y = element_blank(), 
+            axis.line.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+            panel.grid = element_blank(),
+            axis.text.y = element_text(angle = 0, size = 10), axis.title.y = element_text(size = 12), 
+            legend.position = "right") 
+
+g0
+```
+
+```{r, Phylum Relative abundance}
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table$Environment %<>% factor(., levels = c("Benthic","Pelagic"))
+#dataset$sample_table %<>% base::subset(Environment == "Pelagic")
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg",
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Phylum", ntaxa = 10, groupmean = "Subbasin")
+g1 <- t1$plot_bar(coord_flip = FALSE, clustering_plot = FALSE, 
+                  color_values = c("#CC8615","#4ABD99","#AF7B9F","#B0BD2D","#17BECF",
+                                   "#8A911E","#CF2D37","#BF6990","#AA7B4C","#907D8A")) +
+      theme(axis.title.x = element_text(size = 12), axis.ticks.y = element_blank(), 
+            axis.line.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+            panel.grid = element_blank(),
+            axis.text.y = element_text(angle = 0, size = 10), axis.title.y = element_text(size = 12), 
+            legend.position = "right") 
+
+g1
+```
+
+```{r}
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table %<>% base::subset(Environment == "Benthic")
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", 
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Phylum", ntaxa = 10, groupmean = "Subbasin")
+g2 <- t1$plot_bar(coord_flip = FALSE, clustering_plot = FALSE, 
+                  color_values = c("#CC8615","#AF7B9F","#17BECF","#4ABD99","#CF2D37",
+                                   "#BF6990","#BA4165","#8C564E","#AA7B4C","#7E652A")) +
+      theme(axis.title.x = element_text(size = 12), axis.ticks.y = element_blank(), 
+            axis.line.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+            panel.grid = element_blank(),
+            axis.text.y = element_text(angle = 0, size = 10), axis.title.y = element_text(size = 12), 
+            legend.position = "right") + ggtitle("Benthic")
+
+g2
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+dataset$sample_table %<>% base::subset(Environment == "Pelagic")
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", 
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Phylum", ntaxa = 10, groupmean = "Subbasin")
+g3 <- t1$plot_bar(coord_flip = FALSE, clustering_plot = FALSE, 
+                  color_values = c("#CC8615","#4ABD99","#B0BD2D","#8A911E","#907D8A",
+                                   "#AF7B9F","#AA7B4C","#878772","#9A9A55","#FFE4B5"
+                                   )) +
+      theme(axis.title.x = element_text(size = 12), axis.ticks.y = element_blank(), 
+            axis.line.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+            panel.grid = element_blank(),
+            axis.text.y = element_blank(), axis.title.y = element_blank(), 
+            legend.position = "right") + ggtitle("Pelagic")
+
+g3
+
+g2 + g3 + plot_layout(widths = unit(c(7,10), c("null","null")))
+
+# Define the colors and text for the legend
+legend_colors <- c("#17BECF","#4ABD99","#B0BD2D","#9A9A55","#878772","#907D8A","#AF7B9F","#BF6990",
+                   "#8C564E","#BA4165","#CF2D37","#7E652A","#8A911E","#CC8615","#AA7B4C","#FFE4B5","gray85")
+legend_text <- c("Acidobacteriota","Actinomycetota","Bacteroidota","Campylobacterota","Chloroflexota","Cyanobacteriota",
+                 "Desulfobacterota","Desulfobacterota E","Gemmatimonadota","Myxococcota","Myxococcota A",
+                 "Nitrospirota","Planctomycetota","Pseudomonadota","Verrucomicrobiota","Thermoproteota","Others")
+
+# Create a data frame for legend entries
+legend_df <- data.frame(x = rep(1, length(legend_text)), y = seq(length(legend_text)), legend_text = legend_text, legend_colors = factor(legend_text, levels = legend_text))
+
+# Create a ggplot with custom legend
+custom_legend_plot <- ggplot(legend_df, aes(x = x, y = y, color = legend_colors)) + 
+                      geom_point(shape = 15, size = 5) + 
+                      scale_color_manual(values = legend_colors, guide = guide_legend(title = "Phylum")) + theme_bw() + 
+                      theme(legend.position = "right") + guides(fill = guide_legend(ncol = 2))
+
+# Print the custom legend plot
+print(custom_legend_plot)
+```
+
+### Taxonomic diversity
+
+```{r, Species diversity}
+# Plot alpha diversity
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(spe.mco)
+t1 <- trans_alpha$new(dataset = dataset, group = "Environment"); t1$data_stat
+t1$cal_diff(method = "t.test"); t1$res_diff
+
+alpha.tbl <- as.data.frame(dataset$alpha_diversity)
+alpha.tbl$Sample <- rownames(dataset$alpha_diversity)
+
+alpha.tbl <- merge(metadata, alpha.tbl, by = "Sample", all.x = TRUE)
+
+# Reorder the 'Environment' factor to ensure Benthic comes before Pelagic
+alpha.tbl$Environment <- factor(alpha.tbl$Environment, levels = c("Benthic", "Pelagic"))
+
+# Plot
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+ae <- ggviolin(alpha.tbl, x = "Environment", y = "Observed", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Observed Species") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); ae
+
+af <- ggviolin(alpha.tbl, x = "Environment", y = "Chao1", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Chao1 Richness") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); af
+
+ag <- ggviolin(alpha.tbl, x = "Environment", y = "Shannon", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Shannon Diversity") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); ag
+
+ah <- ggviolin(alpha.tbl, x = "Environment", y = "Pielou", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Pielou's Evenness") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); ah
+
+# Combine the plots in one row
+a2 <- ae | af | ag | ah + plot_layout(guides = 'collect') + plot_annotation(); 
+a2
+```
+
+```{r, Beta diversity}
+# Plot beta diversity.
+
+dataset <- clone(spe.mco)
+
+# measure parameter must be one of names(dataset$beta_diversity)
+t1 <- trans_beta$new(dataset = dataset, group = "Environment", measure = "jaccard")
+# PCoA, PCA and NMDS are available
+t1$cal_ordination(method = "NMDS"); class(t1$res_ordination) # t1$res_ordination is the ordination result list
+# plot the PCoA result with confidence ellipse
+ba <- t1$plot_ordination(plot_color = "Environment", 
+                         plot_shape = "Reference", 
+                         plot_type = c("point","chull"), ellipse_chull_alpha = 0,
+                         color_values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"),
+                         #add_sample_label = "HELCOM"
+                         ) +
+                         theme(panel.grid = element_blank(), legend.position = "none", axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5)) +
+                         ggalt::geom_encircle(aes(s_shape = 1, expand = 0, group = Environment, fill = Environment, colour = Environment), alpha = 0.25)
+ba
+
+# manova for specified group set: such as "Region"
+t1$cal_manova(manova_set = "Environment + Subbasin"); t1$res_manova
+
+t1$cal_anosim(group = "Environment"); t1$res_anosim
+t1$cal_betadisper(); t1$res_betadisper
+
+# calculate and plot sample distances within groups
+t1$cal_group_distance(within_group = TRUE)
+
+# perform T-test
+t1$cal_group_distance_diff(method = "t.test"); t1$res_group_distance_diff
+
+# extract the axis scores
+tmp <- t1$res_ordination$scores
+# differential test with trans_env class
+t2 <- trans_env$new(dataset = dataset, add_data = tmp[, 1:2])
+# 'KW_dunn' for non-parametric test
+t2$cal_diff(group = "Environment", method = "t.test")
+
+# groups order in p2 is same with p1; use legend.position = "none" to remove redundant legend
+bb <- t2$plot_diff(measure = "MDS1", add_sig = T, color = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3")) +
+      geom_boxplot(fill = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), color = "black",
+                   alpha = 0.5, outlier.shape = NA) + theme_bw() + coord_flip() + 
+      theme(legend.position = "none", axis.title.x = element_blank(), axis.text.y = element_blank(), 
+            axis.ticks.y = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(),  
+            panel.grid = element_blank())
+bc <- t2$plot_diff(measure = "MDS2", add_sig = T, color = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3")) + 
+      geom_boxplot(fill = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), color = "black",
+                   alpha = 0.5, outlier.shape = NA) + theme_bw() + 
+      theme(legend.position = "none", axis.title.y = element_blank(), axis.text.x = element_blank(), 
+            axis.ticks.x = element_blank(), panel.grid = element_blank())
+
+# height of the upper figure and width of the right-hand figure are both 0.2-fold of the main figure
+bb <- bb + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+bc <- bc + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+b1 <- ba %>% insert_top(bb, height = 0.2) #%>% insert_right(bc, width = 0.2)
+b1
+```
+
+```{r}
+# Merge the two data frames on the "HMM" column
+bin.rpk <- merge(rpkm, canthyd, by = "HMM", all.x = TRUE); bin.rpk <- bin.rpk[, c(setdiff(names(bin.rpk), "HMM"), "HMM")]
+# Merge the two data frames on the "MAGs" column
+bin.tbl <- merge(bin.rpk, mag.tbl, by = "MAG", all.x = TRUE); bin.tbl <- bin.tbl[, c(setdiff(names(bin.tbl), "MAG"), "MAG")]
+
+# Create the bubble plot
+ggplot(bin.tbl, aes(x = Phylum, y = Genes, size = `HDG Count`, color = Type)) +
+  geom_point(alpha = 0.5) +
+  labs(x = "Phylum") +
+  scale_color_manual(values = c("Aerobic alkane" = "#87AEFA", "Aerobic aromatic" = "#B0E0E6", "Anaerobic alkane" = "#FF6C00", "Anaerobic aromatic" = "#FFDAB9")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(face = "italic"), axis.title.y = element_blank())
+```
+
+### HDG composition
+
+```{r, Correlation with MAGs parameters}
+# Calculate the Pearson correlation coefficient
+correlation <- cor(mag.tbl$`HDG Count`, mag.tbl$`Genome size`, method = "pearson")
+
+# Perform a hypothesis test for correlation
+cor_test <- cor.test(mag.tbl$`HDG Count`, mag.tbl$`Genome size`, method = "pearson")
+
+# Create the ggplot scatter plot with a linear trendline
+ca <- ggplot(mag.tbl, aes(x = `HDG Count`, y = `Genome size`)) +
+      geom_point(color = "gray50", alpha = 0.5) +  # Scatter plot with transparency
+      geom_smooth(method = "lm", color = "black", se = TRUE, size = 1.5) +  # Add the correlation coefficient and p-value as text annotation
+      geom_text(x = max(mag.tbl$`HDG Count`) * 0.8, y = max(mag.tbl$`Genome size`) * 0.9, label = paste("r =", round(correlation, 4)), color = "black", size = 5, hjust = 0, vjust = 1) +
+      theme(axis.text.y = element_text(angle = 90, hjust = 0.5)) +
+      labs(title = "All MAGs", x = "HDG Count", y = "Genome Size (bp)") +
+      theme_classic()
+
+print(ca)
+
+# Subsetting Benthic environment
+sdm.tbl <- subset(mag.tbl, Environment == "Benthic")
+
+# Subsetting Pelagic environment
+plg.tbl <- subset(mag.tbl, Environment == "Pelagic")
+
+# Calculate the Pearson correlation coefficient
+correlation <- cor(sdm.tbl$`HDG Count`, sdm.tbl$`Genome size`, method = "pearson")
+
+# Perform a hypothesis test for correlation
+cor_test <- cor.test(sdm.tbl$`HDG Count`, sdm.tbl$`Genome size`, method = "pearson")
+
+# Create the ggplot scatter plot with a linear trendline
+cb <- ggplot(sdm.tbl, aes(x = `HDG Count`, y = `Genome size`)) +
+      geom_point(color = "#8B4513", alpha = 0.5) +  # Scatter plot with transparency
+      geom_smooth(method = "lm", color = "black", se = TRUE, size = 1.5) +  # Add the correlation coefficient and p-value as text annotation
+      geom_text(x = max(sdm.tbl$`HDG Count`) * 0.8, y = max(sdm.tbl$`Genome size`) * 0.9, label = paste("r =", round(correlation, 4)), color = "black", size = 5, hjust = 0, vjust = 1) +
+      theme(axis.text.y = element_text(angle = 90, hjust = 0.5)) +
+      labs(title = "Benthic MAGs", x = "HDG Count", y = "Genome Size (bp)") +
+      theme_classic()
+
+print(cb)
+
+# Calculate the Pearson correlation coefficient
+correlation <- cor(plg.tbl$`HDG Count`, plg.tbl$`Genome size`, method = "pearson")
+
+# Perform a hypothesis test for correlation
+cor_test <- cor.test(plg.tbl$`HDG Count`, plg.tbl$`Genome size`, method = "pearson")
+
+# Create the ggplot scatter plot with a linear trendline
+cc <- ggplot(plg.tbl, aes(x = `HDG Count`, y = `Genome size`)) +
+      geom_point(color = "#7570B3", alpha = 0.5) +  # Scatter plot with transparency
+      geom_smooth(method = "lm", color = "black", se = TRUE, size = 1.5) +  # Add the correlation coefficient and p-value as text annotation
+      geom_text(x = max(plg.tbl$`HDG Count`) * 0.8, y = max(plg.tbl$`Genome size`) * 0.9, label = paste("r =", round(correlation, 4)), color = "black", size = 5, hjust = 0, vjust = 1) +
+      theme(axis.text.y = element_text(angle = 90, hjust = 0.5)) +
+      labs(title = "Pelagic MAGs", x = "HDG Count", y = "Genome Size (bp)") +
+      theme_classic()
+
+print(cc)
+
+# Combine the plots in one row
+c1 <- (ca) / (cb | cc) + plot_layout(guides = 'collect') + plot_annotation(); c1
+```
+
+```{r, Donut Plot}
+# Generate a donut plot of the pathways type per environment
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(hdg.mco)
+dataset$tax_table$Type %<>% factor(., levels = c("Aerobic alkane", "Anaerobic alkane", "Aerobic aromatic", "Anaerobic aromatic"))
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Type", ntaxa = 8, groupmean = "Environment")
+a1 <- t1$plot_donut(label = TRUE, color_values = c("Aerobic alkane" = "#87AEFA", "Aerobic aromatic" = "#B0E0E6", "Anaerobic alkane" = "#FF6C00", "Anaerobic aromatic" = "#FFDAB9")); a1
+```
+
+```{r, Barplot of pathway types per sub-basin, i.e., HELCOM categories}
+# Clone the dataset and redefine Region levels
+subset <- clone(hdg.mco)
+subset$sample_table %<>% base::subset(Environment == "Benthic")
+subset$tax_table$Type %<>% factor(., levels = c("Aerobic alkane", "Anaerobic alkane", "Aerobic aromatic", "Anaerobic aromatic"))
+subset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                       "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga", "Northern Baltic Proper", "Gulf of Finland",
+                                                       "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+# The groupmean parameter can be used to obtain the group-mean barplot.
+t1 <- trans_abund$new(dataset = subset, taxrank = "Type", ntaxa = 10, groupmean = "Subbasin")
+a2 <- t1$plot_bar(bar_full = FALSE, use_alluvium = TRUE, others_color = "grey70", legend_text_italic = FALSE, order_x = c(),
+                  color_values = c("Aerobic alkane" = "#87AEFA", "Aerobic aromatic" = "#B0E0E6", "Anaerobic alkane" = "#FF6C00", "Anaerobic aromatic" = "#FFDAB9")) + 
+      theme_classic() + ggalluvial::geom_alluvium(width = 0/5, alpha = 0.8) +
+      theme(#axis.text.x = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 7), panel.grid = element_blank(),
+      axis.text.y = element_text(angle = 0, size = 8), axis.title.y = element_text(size = 10), plot.title = element_text(size = 10),
+      legend.position = "none") + labs(y = "HDG Relative Abund. (%)") + ggtitle("Benthic")
+
+subset <- clone(hdg.mco)
+subset$sample_table %<>% base::subset(Environment == "Pelagic")
+subset$tax_table$Type %<>% factor(., levels = c("Aerobic alkane", "Anaerobic alkane", "Aerobic aromatic", "Anaerobic aromatic"))
+subset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                       "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga", "Northern Baltic Proper", "Gulf of Finland",
+                                                       "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+# The groupmean parameter can be used to obtain the group-mean barplot.
+t1 <- trans_abund$new(dataset = subset, taxrank = "Type", ntaxa = 10, groupmean = "Subbasin")
+a3 <- t1$plot_bar(bar_full = FALSE, use_alluvium = TRUE, others_color = "grey70", legend_text_italic = FALSE,
+                  color_values = c("Aerobic alkane" = "#87AEFA", "Aerobic aromatic" = "#B0E0E6", "Anaerobic alkane" = "#FF6C00", "Anaerobic aromatic" = "#FFDAB9")) + 
+      theme_classic() + ggalluvial::geom_alluvium(width = 0/5, alpha = 0.8) +
+      theme(#axis.text.x = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 7), panel.grid = element_blank(),
+      axis.text.y = element_text(angle = 0, size = 8), axis.title.y = element_blank(), plot.title = element_text(size = 10),
+      legend.position = "none") + labs(y = "HDG Relative Abund. (%)") + ggtitle("Pelagic")
+
+a2 + a3 + plot_layout(widths = unit(c(7,10), c("null","null")))
+```
+
+```{r, Lineplot of pathway types per sub-basin, i.e., HELCOM categories}
+# Lineplot of pathway types per sub-basin, i.e., HELCOM categories
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(hdg.mco)
+dataset$tax_table$Type %<>% factor(., levels = c("Aerobic alkane", "Anaerobic alkane", "Aerobic aromatic", "Anaerobic aromatic"))
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                       "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga", "Northern Baltic Proper", "Gulf of Finland",
+                                                       "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Type", ntaxa = 5, groupmean = "Subbasin")
+t1$plot_line(position = position_dodge(0.3), xtext_angle = 45, color_values = c("Aerobic alkane" = "#87AEFA", "Aerobic aromatic" = "#B0E0E6", "Anaerobic alkane" = "#FF6C00", "Anaerobic aromatic" = "#FFDAB9"))
+```
+
+```{r, Number of HDGs observed per group}
+# Number of HDGs observed per group 
+
+library(phyloseq)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+
+physeq <- hdg.psq
+
+# Convert abundance data to incidence (presence/absence)
+physeq_binary <- transform_sample_counts(physeq, function(x) ifelse(x > 0, 1, 0))
+
+# Melt the phyloseq object to a data frame
+physeq_df <- physeq_binary %>% psmelt() %>% group_by(Subbasin, Type) %>%  summarise(Incidence = sum(Abundance), .groups = "drop")  # Sum binary presence/absence
+
+# Create the stacked bar plot
+a3 <- ggplot(physeq_df, aes(x = Subbasin, y = Incidence, fill = Type)) +
+      geom_bar(stat = "identity", position = "stack") + theme_classic() + 
+      scale_fill_manual(values = c("Aerobic alkane" = "#87AEFA", "Aerobic aromatic" = "#B0E0E6", "Anaerobic alkane" = "#FF6C00", "Anaerobic aromatic" = "#FFDAB9")) +
+      theme(axis.text.x = element_text(size = 8), 
+            axis.text.y = element_text(size = 8), axis.title.x = element_blank(), axis.title.y = element_text(size = 10), legend.position = "right") +
+      labs(x = "Baltic Sea Sub-basins", y = NULL, fill = "Type") + guides(fill = guide_legend(ncol = 2)) +
+      coord_flip(); a3
+```
+
+```{r, Shared HMM UpSet Plot}
+# Pie chart of shared species
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+
+# create venn plot with more information
+tmp <- hmm.mco$merge_samples("Subbasin")
+
+t1 <- trans_venn$new(dataset = tmp)
+
+# only show some sets with large intersection numbers
+t1$data_summary %<>% .[.[, 1] > 0, ]
+
+g1 <- t1$plot_bar(left_plot = TRUE, bottom_height = 0.5, left_width = 0.15, up_bar_fill = "grey50", left_bar_fill = "grey50", bottom_point_color = "black", sort_samples = FALSE)
+g1
+```
+
+```{r, Substrate Heatmap}
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+dataset$sample_table$Environment %<>% factor(., levels = c("Benthic","Pelagic"))
+
+## Plot heatmap Substrates
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Substrate", ntaxa = 40)
+s1 <- t1$plot_heatmap(facet = c("Environment"), xtext_keep = TRUE, xtext_type_hor = FALSE, withmargin = FALSE, 
+                      color_values = c(RColorBrewer::brewer.pal(n = 30, name = "OrRd")), xtext_size = 6) + 
+                      theme_classic2() +
+                      theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 8, face = NULL), 
+                            legend.position = "left")
+
+print(s1)
+```
+
+```{r}
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+dataset$sample_table %<>% base::subset(Environment == "Benthic")
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", 
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Genes", ntaxa = 10, groupmean = "Subbasin")
+g2 <- t1$plot_bar(coord_flip = FALSE, clustering_plot = FALSE, 
+                  color_values = c("#8175AAFF","#6FB899FF","#31A1B3FF","#CCB22BFF","#A39FC9FF",
+                                   "#94D0C0FF","#959C9EFF","#027B8EFF","#9F8F12FF","#F3AE6DFF")) +
+      theme(axis.title.x = element_text(size = 12), axis.ticks.y = element_blank(), 
+            axis.line.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+            panel.grid = element_blank(),
+            axis.text.y = element_text(angle = 0, size = 10), axis.title.y = element_text(size = 12), 
+            legend.position = "none") + ggtitle("Benthic")
+
+g2
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+dataset$sample_table %<>% base::subset(Environment == "Pelagic")
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", 
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+
+t1 <- trans_abund$new(dataset = dataset, taxrank = "Genes", ntaxa = 10, groupmean = "Subbasin")
+g3 <- t1$plot_bar(coord_flip = FALSE, clustering_plot = FALSE, 
+                  color_values = c("#8175AAFF","#6FB899FF","#959C9EFF","#F3AE6DFF","#31A1B3FF",                                   
+                                   "#FBE697FF","#94D0C0FF","#CCB22BFF","#027B8EFF","#9F8F12FF")) +
+      theme(axis.title.x = element_text(size = 12), axis.ticks.y = element_blank(), 
+            axis.line.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1, size = 10), 
+            panel.grid = element_blank(),
+            axis.text.y = element_blank(), axis.title.y = element_blank(), 
+            legend.position = "none") + ggtitle("Pelagic")
+
+g3
+
+g2 + g3 + plot_layout(widths = unit(c(7,10), c("null","null")))
+```
+
+```{r}
+# Define the colors and text for the legend
+legend_colors <- c("#17BECF","#4ABD99","#B0BD2D","#9A9A55","#878772","#907D8A","#AF7B9F","#BF6990",
+                   "#8C564E","#BA4165","#CF2D37","#7E652A","#8A911E","#CC8615","#AA7B4C","#FFE4B5","gray85")
+legend_text <- c("Acidobacteriota","Actinomycetota","Bacteroidota","Campylobacterota","Chloroflexota","Cyanobacteriota",
+                 "Desulfobacterota","Desulfobacterota E","Gemmatimonadota","Myxococcota","Myxococcota A",
+                 "Nitrospirota","Planctomycetota","Pseudomonadota","Verrucomicrobiota","Thermoproteota","Others")
+
+# Create a data frame for legend entries
+legend_df <- data.frame(x = rep(1, length(legend_text)), y = seq(length(legend_text)), legend_text = legend_text, legend_colors = factor(legend_text, levels = legend_text))
+
+# Create a ggplot with custom legend
+custom_legend_plot <- ggplot(legend_df, aes(x = x, y = y, color = legend_colors)) + 
+                      geom_point(shape = 15, size = 5) + 
+                      scale_color_manual(values = legend_colors, guide = guide_legend(title = "Phylum")) + theme_bw() + 
+                      theme(legend.position = "right") + guides(fill = guide_legend(ncol = 2))
+
+# Print the custom legend plot
+print(custom_legend_plot)
+```
+
+### HDG diversity
+
+```{r, HDG diversity}
+# Plot alpha diversity
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+t1 <- trans_alpha$new(dataset = dataset, group = "Environment"); t1$data_stat
+t1$cal_diff(method = "t.test"); t1$res_diff
+
+alpha.tbl <- as.data.frame(dataset$alpha_diversity)
+alpha.tbl$Sample <- rownames(dataset$alpha_diversity)
+
+alpha.tbl <- merge(metadata, alpha.tbl, by = "Sample", all.x = TRUE)
+
+# Reorder the 'Environment' factor to ensure Benthic comes before Pelagic
+alpha.tbl$Environment <- factor(alpha.tbl$Environment, levels = c("Benthic", "Pelagic"))
+
+# Plot
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+aa <- ggviolin(alpha.tbl, x = "Environment", y = "Observed", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Observed HDGs") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); aa
+
+ab <- ggviolin(alpha.tbl, x = "Environment", y = "Chao1", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Chao1 Richness") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); ab
+
+ac <- ggviolin(alpha.tbl, x = "Environment", y = "Shannon", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Shannon Diversity") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); ac
+
+ad <- ggviolin(alpha.tbl, x = "Environment", y = "Pielou", color = "black", 
+               palette = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), add = "boxplot", 
+               outlier.shape = NA, fill = "Environment", alpha = 0.5) +
+               geom_jitter(aes(color = Environment), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+               stat_compare_means(method = "t.test", label = "p.signif", label.x.npc = "middle", size = 5) +
+               labs(x = NULL, y = "Pielou's Evenness") +
+               theme(axis.text.x = element_blank(),
+                     axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                     legend.position = "none"); ad
+
+# Combine the plots in one row
+a1 <- (aa | ab | ac | ad) + plot_layout(guides = 'collect') + plot_annotation(); a1
+```
+
+```{r, Benthic HDG alpha}
+# Plot alpha diversity
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(sdm.mco)
+
+alpha.tbl <- as.data.frame(dataset$alpha_diversity)
+alpha.tbl$Sample <- rownames(dataset$alpha_diversity)
+
+alpha.tbl <- merge(metadata, alpha.tbl, by = "Sample", all.x = FALSE)
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+ai <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Observed", color = "black", 
+                palette = rep("#8B4513", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Observed HDGs") +
+                theme(axis.text.x = element_blank(),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); ai
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+aj <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Chao1", color = "black", 
+                palette = rep("#8B4513", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Chao1 Richness") +
+                theme(axis.text.x = element_blank(),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); aj
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+ak <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Shannon", color = "black", 
+                palette = rep("#8B4513", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Shannon Diversity") +
+                theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); ak
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+al <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Pielou", color = "black", 
+                palette = rep("#8B4513", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Pielou's Evenness") +
+                theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); al
+
+# Combine the plots in one row
+a3 <- (ai + aj) / (ak + al) + plot_layout(guides = 'collect') + plot_annotation(); a3
+```
+
+```{r, Pelagic HDG alpha}
+# Plot alpha diversity
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(plg.mco)
+
+alpha.tbl <- as.data.frame(dataset$alpha_diversity)
+alpha.tbl$Sample <- rownames(dataset$alpha_diversity)
+
+alpha.tbl <- merge(metadata, alpha.tbl, by = "Sample", all.x = FALSE)
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+ai <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Observed", color = "black", 
+                palette = rep("#7570B3", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Observed HDGs") +
+                theme(axis.text.x = element_blank(),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); ai
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+aj <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Chao1", color = "black", 
+                palette = rep("#7570B3", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Chao1 Richness") +
+                theme(axis.text.x = element_blank(),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); aj
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+ak <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Shannon", color = "black", 
+                palette = rep("#7570B3", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Shannon Diversity") +
+                theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); ak
+
+# Create the violin plot with specific colors, black borders, a box inside the violin, and no outliers
+al <- ggboxplot(alpha.tbl, x = "HELCOM", y = "Pielou", color = "black", 
+                palette = rep("#7570B3", 17),
+                outlier.shape = NA, fill = "HELCOM", alpha = 0.5) +
+                geom_jitter(aes(color = HELCOM), alpha = 0.25, shape = 16, size = 1, stroke = 1, color = "gray50") +
+                stat_compare_means(method = "kruskal.test",
+                                   label = "p.format", label.x.npc = "middle", 
+                                   size = 5) +
+                labs(x = NULL, y = "Pielou's Evenness") +
+                theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+                      axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5),
+                      legend.position = "none"); al
+
+# Combine the plots in one row
+a4 <- (ai + aj) / (ak + al) + plot_layout(guides = 'collect') + plot_annotation(); a4
+```
+
+```{r, Beta diversity}
+# Plot beta diversity.
+
+dataset <- clone(hmm.mco)
+
+# measure parameter must be one of names(dataset$beta_diversity)
+t1 <- trans_beta$new(dataset = dataset, group = "Environment", measure = "jaccard")
+# PCoA, PCA and NMDS are available
+t1$cal_ordination(method = "NMDS"); class(t1$res_ordination) # t1$res_ordination is the ordination result list
+# plot the PCoA result with confidence ellipse
+ba <- t1$plot_ordination(plot_color = "Environment", 
+                         plot_shape = "Reference", 
+                         plot_type = c("point","chull"), ellipse_chull_alpha = 0,
+                         color_values = c("Pelagic" = "#7570B3", "Benthic" = "#8B4513"),
+                         #add_sample_label = "HELCOM"
+                         ) +
+                         theme(panel.grid = element_blank(), legend.position = "right", axis.text.y = element_text(size = 8, angle = 90, hjust = 0.5)) +
+                         ggalt::geom_encircle(aes(s_shape = 1, expand = 0, group = Environment,
+                                                  fill = Environment, colour = Environment), alpha = 0.25)
+ba
+
+# manova for specified group set: such as "Region"
+t1$cal_manova(manova_set = "Environment + Subbasin"); t1$res_manova
+
+t1$cal_anosim(group = "Environment"); t1$res_anosim
+t1$cal_betadisper(); t1$res_betadisper
+
+# calculate and plot sample distances within groups
+t1$cal_group_distance(within_group = TRUE)
+
+# perform T-test
+t1$cal_group_distance_diff(method = "t.test"); t1$res_group_distance_diff
+
+# extract the axis scores
+tmp <- t1$res_ordination$scores
+# differential test with trans_env class
+t2 <- trans_env$new(dataset = dataset, add_data = tmp[, 1:2])
+# 'KW_dunn' for non-parametric test
+t2$cal_diff(group = "Environment", method = "t.test")
+
+# groups order in p2 is same with p1; use legend.position = "none" to remove redundant legend
+bb <- t2$plot_diff(measure = "MDS1", add_sig = T, color = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3")) +
+      geom_boxplot(fill = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), color = "black",
+                   alpha = 0.5, outlier.shape = NA) + theme_bw() + coord_flip() + 
+      theme(legend.position = "none", axis.title.x = element_blank(), axis.text.y = element_blank(), 
+            axis.ticks.y = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(),  
+            panel.grid = element_blank())
+bc <- t2$plot_diff(measure = "MDS2", add_sig = T, color = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3")) + 
+      geom_boxplot(fill = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), color = "black",
+                   alpha = 0.5, outlier.shape = NA) + theme_bw() + 
+      theme(legend.position = "none", axis.title.y = element_blank(), axis.text.x = element_blank(), 
+            axis.ticks.x = element_blank(), panel.grid = element_blank())
+
+# height of the upper figure and width of the right-hand figure are both 0.2-fold of the main figure
+bb <- bb + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+bc <- bc + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+b1 <- ba %>% insert_top(bb, height = 0.2) #%>% insert_right(bc, width = 0.2)
+b1
+```
+
+
+### Alpha diversity linear regression analysis
+
+```{r, Linear regression analysis}
+### Perform correlation test
+correlation <- cor.test(spe.mco$alpha_diversity$Observed, hmm.mco$alpha_diversity$Observed)
+
+# Extract p-value and correlation coefficient
+p_value <- signif(correlation$p.value, 4); r_value <- correlation$estimate
+# Calculate R-squared
+r_squared <- r_value^2
+
+# Create a data frame for plotting
+data <- data.frame(spe = spe.mco$alpha_diversity$Observed, 
+                   hmm = hmm.mco$alpha_diversity$Observed)
+
+# Plot the data and add a regression line with R² and p-value annotations
+ca <- ggplot(data, aes(x = spe, y = hmm)) + geom_point(color = "gray", alpha = 0.5) + # Scatter plot
+      geom_smooth(method = "lm", col = "black") + # Linear regression line
+      labs(title = "Observed", x = "Species", y = "HDGs") + 
+      theme_classic2() + theme(axis.text.y = element_text(angle = 90, vjust = 0.5, hjust = 0.5)) # Rotate y-axis text
+
+### Perform correlation test
+correlation <- cor.test(spe.mco$alpha_diversity$Chao1, hmm.mco$alpha_diversity$Chao1)
+
+# Extract p-value and correlation coefficient
+p_value <- signif(correlation$p.value, 4); r_value <- correlation$estimate
+# Calculate R-squared
+r_squared <- r_value^2
+
+# Create a data frame for plotting
+data <- data.frame(spe = spe.mco$alpha_diversity$Chao1, 
+                   hmm = hmm.mco$alpha_diversity$Chao1)
+
+# Plot the data and add a regression line with R² and p-value annotations
+cb <- ggplot(data, aes(x = spe, y = hmm)) + geom_point(color = "gray", alpha = 0.5) + # Scatter plot
+      geom_smooth(method = "lm", col = "black") + # Linear regression line
+      labs(title = "Chao1 Richness", x = "Species", y = "HDGs") +
+      theme_classic2() + theme(axis.text.y = element_text(angle = 90, vjust = 0.5, hjust = 0.5)) # Rotate y-axis text
+
+### Perform correlation test
+correlation <- cor.test(spe.mco$alpha_diversity$Shannon, hmm.mco$alpha_diversity$Shannon)
+
+# Extract p-value and correlation coefficient
+p_value <- signif(correlation$p.value, 4); r_value <- correlation$estimate
+# Calculate R-squared
+r_squared <- r_value^2
+
+# Create a data frame for plotting
+data <- data.frame(spe = spe.mco$alpha_diversity$Shannon, 
+                   hmm = hmm.mco$alpha_diversity$Shannon)
+
+# Plot the data and add a regression line with R² and p-value annotations
+cc <- ggplot(data, aes(x = spe, y = hmm)) + geom_point(color = "gray", alpha = 0.5) + # Scatter plot
+      geom_smooth(method = "lm", col = "black") + # Linear regression line
+      labs(title = "Shannon Diversity", x = "Species", y = "HDGs") +
+      theme_classic2() + theme(axis.text.y = element_text(angle = 90, vjust = 0.5, hjust = 0.5)) # Rotate y-axis text
+
+### Perform correlation test
+correlation <- cor.test(spe.mco$alpha_diversity$Pielou, hmm.mco$alpha_diversity$Pielou)
+
+# Extract p-value and correlation coefficient
+p_value <- signif(correlation$p.value, 4); r_value <- correlation$estimate
+# Calculate R-squared
+r_squared <- r_value^2
+
+# Create a data frame for plotting
+data <- data.frame(spe = spe.mco$alpha_diversity$Pielou, 
+                   hmm = hmm.mco$alpha_diversity$Pielou)
+
+# Plot the data and add a regression line with R² and p-value annotations
+cd <- ggplot(data, aes(x = spe, y = hmm)) + geom_point(color = "gray", alpha = 0.5) + # Scatter plot
+      geom_smooth(method = "lm", col = "black") + # Linear regression line
+      labs(title = "Pielou Evenness", x = "Species", y = "HDGs") +
+      theme_classic2() + theme(axis.text.y = element_text(angle = 90, vjust = 0.5, hjust = 0.5)) # Rotate y-axis text
+
+c1 <- ca | cb | cc | cd
+c1
+``` 
+
+### Substrate heatmap
+
+```{r}
+dataset <- clone(hmm.mco)
+
+dataset$tax_table$Substrate <- gsub("s__", "", dataset$tax_table$Substrate)
+dataset$tax_table$`Enzymatic Group` <- NULL
+psq <- file2meco::meco2phyloseq(dataset)
+
+h1 <- psq %>% 
+      ps_arrange(Environment) %>% 
+      tax_transform("compositional", rank = "Substrate") %>% 
+      comp_heatmap(grid_col = NA, colors = heat_palette(palette = "Terrain", rev = TRUE),
+                   tax_anno = taxAnnotation(Prev. = anno_tax_prev(bar_width = 0.5, border = T), 
+                                            Log10. = anno_tax_box(trans = "log10", zero_replace = "halfmin")),
+                   #taxa_side = "bottom",
+                   sample_anno = sampleAnnotation(Environment = anno_sample("Environment"), 
+                                                  col = list(Environment = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3")),
+                                                  border = TRUE,
+                                                  Subbasin = anno_sample_cat(var = "Subbasin", 
+                                                  col = c("Skagerrak" = "gray75", "Kattegat"= "#A16928", "Kiel Bay" = "#AD7A3D",
+                                                          "Bay of Mecklenburg" = "#B98C52", "Arkona Basin" = "#C49E68",
+                                                          "Bornholm Basin" = "#CEB07E", "Gdansk Basin" = "#D9C394", 
+                                                          "Eastern Gotland Basin" = "#E3D6AB", "Western Gotland Basin" = "#EDEAC2",
+                                                          "Gulf of Riga" = "#D5DBBD", "Northern Baltic Proper" = "#BDCCB9", 
+                                                          "Gulf of Finland" = "#A3BEB4", "Åland Sea" = "#8AB0AF",
+                                                          "Bothnian Sea" = "#6DA2AA", "The Quark" = "#4A94A5", "Bothnian Bay" = "#2887A1"),
+                                                  box_col = NA, border_col = "black", legend_title = "Subbasin")), sample_seriation = "Identity")
+
+h1 %>% ComplexHeatmap::draw(annotation_legend_list = attr(h1, "AnnoLegends"))
+```
+
+### Differential analysis
+
+```{r}
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+dataset$tax_table$Genes <- gsub("g__", "", dataset$tax_table$Genes)
+
+# use Genus level for parameter taxa_level, if you want to use all taxa, change to "all"
+# nresam = 1 and boots = 1 represent no bootstrapping and use all samples directly
+t1 <- trans_diff$new(dataset = dataset, method = "rf", group = "Environment", taxa_level = "Genes")
+# plot the MeanDecreaseGini bar
+# group_order is designed to sort the groups
+g1 <- t1$plot_diff_bar(use_number = 1:15, group_order = c("Benthic", "Pelagic"), 
+                       color_values = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), keep_prefix = FALSE) + 
+                       theme_classic2() + theme(axis.text.y = element_text(face = "italic"))
+# plot the abundance using same taxa in g1
+g2 <- t1$plot_diff_abund(group_order = c("Benthic", "Pelagic"), select_taxa = t1$plot_diff_bar_taxa, 
+                         plot_type = "barerrorbar", add_sig = TRUE, errorbar_addpoint = FALSE, errorbar_color_black = FALSE,
+                         color_values = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), keep_prefix = FALSE) + theme_classic2() 
+# now the y axis in g1 and g2 is same, so we can merge them
+# remove g1 legend; remove g2 y axis text and ticks
+g1 <- g1 + theme(legend.position = "none")
+g2 <- g2 + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "none")
+p <- g1 %>% aplot::insert_right(g2)
+p
+
+t2 <- trans_diff$new(dataset = dataset, select_taxa = t1$plot_diff_bar_taxa, method = "t.test", group = "Environment", taxa_level = "Genes")
+g3 <- t2$plot_diff_abund(keep_prefix = FALSE); g3
+```
+
+```{r}
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+dataset$tax_table$Substrate <- gsub("s__", "", dataset$tax_table$Substrate)
+
+# use Genus level for parameter taxa_level, if you want to use all taxa, change to "all"
+# nresam = 1 and boots = 1 represent no bootstrapping and use all samples directly
+t1 <- trans_diff$new(dataset = dataset, method = "rf", group = "Environment", taxa_level = "Substrate")
+# plot the MeanDecreaseGini bar
+# group_order is designed to sort the groups
+g1 <- t1$plot_diff_bar(use_number = 1:30, group_order = c("Benthic", "Pelagic"), 
+                       color_values = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), keep_prefix = FALSE) + 
+                       theme_classic2() + theme(axis.text.y = element_text(face = "italic"))
+# plot the abundance using same taxa in g1
+g2 <- t1$plot_diff_abund(group_order = c("Benthic", "Pelagic"), select_taxa = t1$plot_diff_bar_taxa, 
+                         plot_type = "barerrorbar", add_sig = TRUE, errorbar_addpoint = FALSE, errorbar_color_black = FALSE,
+                         color_values = c("Benthic" = "#8B4513", "Pelagic" = "#7570B3"), keep_prefix = FALSE) + theme_classic2() 
+# now the y axis in g1 and g2 is same, so we can merge them
+# remove g1 legend; remove g2 y axis text and ticks
+g1 <- g1 + theme(legend.position = "none")
+g2 <- g2 + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "none")
+p <- g1 %>% aplot::insert_right(g2)
+p
+
+#t2 <- trans_diff$new(dataset = dataset, select_taxa = t1$plot_diff_bar_taxa, method = "t.test", group = "Environment", taxa_level = "Genes")
+#g3 <- t2$plot_diff_abund(keep_prefix = FALSE); g3
+```
+
+### Environmental Association
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(ggpubr)
+
+# Data
+subbasin_data <- data.frame(Subbasin = c("Kattegat", "Kiel Bay", "Bay of Mecklenburg", "Arkona Basin",
+                                         "Bornholm Basin", "Gdansk Basin", "Eastern Gotland Basin",
+                                         "Western Gotland Basin", "Gulf of Riga", "Northern Baltic Proper",
+                                         "Gulf of Finland", "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"),
+                            Oil = c(1.31, 0.04, 0.01, 1.23, 1.08, 0.32, 0.06, 0.38, 0.00, 1.71, 3.10, 0.01, 0.33, 0.00, 0.05))
+
+# Ensure the order is maintained by converting Subbasin to a factor
+subbasin_data$Subbasin <- factor(subbasin_data$Subbasin, levels = subbasin_data$Subbasin)
+
+# Define colors
+subbasin_colors <- c("Kattegat" = "#A16928", "Kiel Bay" = "#AD7A3D", "Bay of Mecklenburg" = "#B98C52",
+                     "Arkona Basin" = "#C49E68", "Bornholm Basin" = "#CEB07E", "Gdansk Basin" = "#D9C394", 
+                     "Eastern Gotland Basin" = "#E3D6AB", "Western Gotland Basin" = "#EDEAC2",
+                     "Gulf of Riga" = "#D5DBBD", "Northern Baltic Proper" = "#BDCCB9", 
+                     "Gulf of Finland" = "#A3BEB4", "Åland Sea" = "#8AB0AF", "Bothnian Sea" = "#6DA2AA",
+                     "The Quark" = "#4A94A5", "Bothnian Bay" = "#2887A1")
+
+# Create the bar plot with colors
+o1 <- ggplot(subbasin_data, aes(x = Subbasin, y = Oil, fill = Subbasin)) +
+      geom_bar(stat = "identity") +  # Bar plot with specific colors
+      scale_fill_manual(values = subbasin_colors) +  # Apply the color mapping
+      theme_classic2() +  # Use the theme_classic2() style
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none") +  # Rotate x-axis text
+      labs(title = "Annual Average Total Oil Spills (m³)", x = NULL, y = "Oil Spill Threshold")
+
+o1
+```
+
+```{r}
+# Clone the dataset and redefine Region levels
+dataset <- clone(hdg.mco)
+dataset$sample_table$Subbasin %<>% factor(., levels = c("Skagerrak", "Kattegat", "Kiel Bay", "Bay of Mecklenburg", 
+                                                        "Arkona Basin", "Bornholm Basin", "Gdansk Basin",
+                                                        "Eastern Gotland Basin", "Western Gotland Basin", "Gulf of Riga",
+                                                        "Northern Baltic Proper", "Gulf of Finland",
+                                                        "Åland Sea", "Bothnian Sea", "The Quark", "Bothnian Bay"))
+
+helcom <- readxl::read_excel("../MS-Baltic-Sea-HDG_Supplementary.xlsx", sheet = "S6 HELCOM")
+helcom$`Oil` <- as.numeric(helcom$`Oil`)
+
+merged_table <- merge(dataset$sample_table, helcom, by = "HELCOM", all.x = TRUE)
+rownames(merged_table) <- rownames(dataset$sample_table)
+dataset$sample_table <- merged_table
+
+# Remove SEA-000
+dataset$sample_table %<>% subset(HELCOM != "SEA-000"); dataset$tidy_dataset()
+
+# Clone the dataset and set Region as a factor with specified levels
+# Rename columns with special characters
+colnames(dataset$sample_table)[which(names(dataset$sample_table) == "Oil")] <- "Oil Spill***"
+colnames(dataset$sample_table)[which(names(dataset$sample_table) == "Latitude")] <- "Latitude***"
+colnames(dataset$sample_table)[which(names(dataset$sample_table) == "Longitude")] <- "Longitude**"
+colnames(dataset$sample_table)[which(names(dataset$sample_table) == "Depth")] <- "Depth***"
+colnames(dataset$sample_table)[which(names(dataset$sample_table) == "Temperature")] <- "Temperature***"
+colnames(dataset$sample_table)[which(names(dataset$sample_table) == "Salinity")] <- "Salinity***"
+
+# Initialize trans_env object and add environmental data
+t1 <- trans_env$new(dataset = dataset, add_data = dataset$sample_table[, c(6:10,13)])
+
+# Perform dbRDA analysis using Bray-Curtis distance
+t1$cal_ordination(method = "dbRDA", use_measure = "jaccard")
+
+# Transform ordination results for visualization
+t1$trans_ordination(adjust_arrow_length = TRUE, max_perc_env = 1.5)
+
+# Plot ordination with environmental variables and color by Region
+e1 <- t1$plot_ordination(plot_color = "Subbasin", plot_type = "point", plot_shape = "Environment", shape_values = c(19,15),
+                         #color_values = c("#8B4513", "#7570B3")) +
+                         color_values = colorRampPalette(paletteer::paletteer_d("rcartocolor::Earth"))(16)) +
+      theme_classic2() + theme(panel.grid = element_blank(), legend.position = "right"); e1
+
+# View ordination terms
+t1$res_ordination_terms
+
+# Perform ANOVA on ordination axes
+t1$cal_ordination_anova()
+t1$res_ordination_axis
+
+# Perform envfit analysis
+t1$cal_ordination_envfit()
+t1$res_ordination_envfit
+```
+
+```{r}
+### Volume of oil detected in the Baltic Sea. During the assessment period 2016-2021 the estimated annual average of oil-spills exceeded the amount during the reference period (2008-2013) in four of the 17 HELCOM sub-basins (Table 3). HELCOM, 2023. Operational oil spills from ships. HELCOM core indicator report. Online. [Date Viewed], [Web link].
+
+# Clone the dataset and redefine Region levels
+dataset <- clone(hmm.mco)
+
+helcom <- readxl::read_excel("../MS-Baltic-Sea-HDG_Supplementary.xlsx", sheet = "S6 HELCOM")
+helcom$`Oil` <- as.numeric(helcom$`Oil`)
+
+merged_table <- merge(dataset$sample_table, helcom, by = "HELCOM", all.x = TRUE)
+rownames(merged_table) <- rownames(dataset$sample_table)
+dataset$sample_table <- merged_table
+
+# Remove SEA-000
+dataset$sample_table %<>% subset(HELCOM != "SEA-000"); dataset$tidy_dataset()
+
+#dataset$tax_table$Type <- gsub("t__", "", dataset$tax_table$Type)
+dataset$tax_table$Genes <- gsub("g__", "", dataset$tax_table$Genes)
+#dataset$tax_table$HDG <- paste(dataset$tax_table$Type, dataset$tax_table$HMM, sep = ": ")
+
+psq <- file2meco::meco2phyloseq(dataset)
+psq %>%  tax_transform("clr", rank = "Genes") %>% cor_heatmap(taxa_side = "top", vars = c("Latitude", "Longitude", "Depth", "Salinity", "Temperature", "Oil"), cor = "spearman", numbers = NULL, 
+                       #var_anno = varAnnotation(Value = anno_var_box(), Zscore = anno_var_density(fun = scale, type = "violin")),
+                       var_anno = varAnnotation(log10p = anno_var_box(function(x) log10(x + 1))),
+                       colors = heat_palette("Green-Orange", rev = TRUE, sym = TRUE)) 
+
+# compute correlations, with p values, and store in a dataframe
+correlations_df <- psq %>% 
+  tax_model(trans = "clr",
+            rank = "Genes",
+            variables = list("Latitude", "Longitude", "Depth", "Salinity", "Temperature", "Oil"),
+            type = microViz::cor_test, method = "spearman",
+            return_psx = FALSE, verbose = FALSE) %>% tax_models2stats(rank = "Genes")
+
+# get nice looking ordering of correlation estimates using hclust
+taxa_hclust <- correlations_df %>%  dplyr::select(term, taxon, estimate) %>% tidyr::pivot_wider(id_cols = taxon, names_from = term, values_from = estimate) %>% tibble::column_to_rownames("taxon") %>% as.matrix() %>% stats::dist(method = "euclidean") %>% hclust(method = "ward.D2") 
+
+taxa_order <- taxa_hclust$labels[taxa_hclust$order]
+
+correlations_df %>% mutate(p.FDR = p.adjust(p.value, method = "fdr")) %>% ggplot(aes(x = term, y = taxon)) +
+  geom_raster(aes(fill = estimate)) +
+  geom_point(data = function(x) filter(x, p.value < 0.05), shape = "asterisk") +
+  geom_point(data = function(x) filter(x, p.FDR < 0.05), shape = "circle", size = 3) +
+  scale_y_discrete(limits = taxa_order) +
+  scale_fill_distiller(palette = "BrBG", limits = c(-0.45, 0.45)) + 
+  theme_classic2() + theme(axis.text.x = element_text(angle = 90)) + labs(x = NULL, y = NULL, fill = "Spearman's\nRank\nCorrelation")
+```
+
+### Other Codes
+
+```{r}
+phylum.cols <- c("Acidobacteriota" = "#17BECF","Actinomycetota" = "#4ABD99","Bacillota I" = "#7DBD63",
+                 "Bacteroidota" = "#B0BD2D","Bdellovibrionota" = "#ADAE38","Campylobacterota" = "#9A9A55",
+                 "Chloroflexota" = "#878772","Cyanobacteriota" = "#907D8A","Desulfobacterota" = "#AF7B9F",
+                 "Desulfobacterota B" = "#CE78B4","Desulfobacterota D" = "#DA73B5","Desulfobacterota E" = "#BF6990",
+                 "Eisenbacteria" = "#A35F6B","Gemmatimonadota" = "#8C564E","Hydrogenedentota" = "#8E5B72",
+                 "Krumholzibacteriota" = "#916195","Latescibacterota" = "#9366B9","Marinisomatota" = "#A65593",
+                 "Myxococcota" = "#BA4165","Myxococcota A" = "#CF2D37","Nitrospinota" = "#B24028",
+                 "Nitrospirota" = "#7E652A","Omnitrophota" = "#498B2B","Patescibacteria" = "#499B27",
+                 "Planctomycetota" = "#8A911E","Pseudomonadota" = "#CC8615","SAR324" = "#EF7E19",
+                 "Verrucomicrobiota" = "#AA7B4C","VGIX01" = "#647980","Zixibacteria" = "#1F77B4")
+```
+
+```{r}
+# Load the necessary library
+library(dplyr)
+library(tidyr)
+
+# Merge the two data frames on the "HMM" column
+bin.rpk <- merge(rpkm, canthyd, by = "HMM", all.x = TRUE); bin.rpk <- bin.rpk[, c(setdiff(names(bin.rpk), "HMM"), "HMM")]
+
+# Merge the two data frames on the "MAGs" column
+bin.tbl <- merge(bin.rpk, mag.tbl, by = "MAG", all.x = TRUE); bin.tbl <- bin.tbl[, c(setdiff(names(bin.tbl), "MAG"), "MAG")]
+
+# Assume mag.tbl is your table
+result <- bin.tbl %>%
+  group_by(Substrate, Subbasin) %>%
+  summarise(Count = n()) %>%
+  pivot_wider(names_from = Subbasin, values_from = Count, values_fill = list(Count = 0))
+
+# View the resulting table
+print(result)
+
+# Save result as an Excel file
+writexl::write_xlsx(result, "result_table.xlsx")
+```
+
+```{r}
+# Load required libraries
+library("phylosmith")
+library("igraph")
+
+psq <- file2meco::meco2phyloseq(spe.mco)
+
+filtered_obj <- conglomerate_taxa(psq, "Phylum")
+co_occurrence_network(filtered_obj, treatment = "Environment", classification = 'Phylum')
+```
