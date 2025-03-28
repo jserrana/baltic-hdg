@@ -1,6 +1,10 @@
 Title: "Microbial hydrocarbon degradation potential of the Baltic Sea ecosystem "
+
 Author: "Joeselle Serrana"
-Date: "4/1/2025"
+
+Date: "4/1/2024"
+
+All the raw sequence data are obtained from the European Nucleotide Archive (ENA) database with project accession numbers PRJEB41834 (Broman et al., 2022; Rodríguez-Gijón et al., 2023), PRJEB22997 (Alneberg et al., 2018), and PRJEB34883 (Alneberg et al., 2020). Specific accession numbers of each metagenome are listed in Table S1. Additional data from the analyses presented in this paper are available in the Supplementary Figures and Tables, and the corresponding visualization and analysis input data and code are publicly accessible at https://github.com/jserrana/baltic-hdg.
 
 ---
 
